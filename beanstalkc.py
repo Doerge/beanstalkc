@@ -21,6 +21,7 @@ __version__ = '0.3.0'
 
 import logging
 import socket
+import random
 
 
 DEFAULT_HOST = 'localhost'
@@ -42,6 +43,117 @@ class SocketError(BeanstalkcException):
         except socket.error, err:
             raise SocketError(err)
 
+class Pool(object):
+    def __init__(self,bstalks):
+        self.bstalks = bstalks
+        self.connections = []
+        self.connect()
+        
+        # Gather the sockets in a dict as tuples of (socket,connection) so we
+        # can resolve socket objects to their connections.
+        self._sockets = dict()
+        for conn in self.connections:
+            self._sockets[conn._socket] = conn
+    
+    def _call_wrap(self,conn,func,args):
+        if (args == None):
+            return func(conn)
+        else:
+            return func(conn, args )
+    
+    def _send_to_rand_conn(self,func,args=None):
+        """Send to a random connection in the pool. Call like this:
+        self._send_to_rand_conn(some_func, ) if there are no arguments to the
+        function. Returns a tuple of the connection the command was sent to,
+        and its response."""
+        conn = random.choice(self.connections)
+        resp = self._call_wrap(conn,func,args)
+        return (conn,resp)
+    
+    def _send_to_empty_connection(self,func,args=None):
+        """Run through all connections and see if any of them have 0 jobs in
+        their tube. If every connection have jobs, choose one at random.
+        Returns a tuple of the connection the command was sent to, and its
+        response."""
+        for conn in self.connections:
+            # Look for an empty tube.
+            if (conn.peek_ready() == None):
+                resp = self._call_wrap(conn,func,args)
+                return (conn,resp)
+        return self._send_to_rand_conn( func,args)
+    
+    def _send_to_nonempty_connection(self,func,args=None):
+        """Run through all connections and see if any of them DOSN'T have 0
+        jobs in their tube. If no connection have jobs, choose one at
+        random. Returns a tuple of the connection the command was sent to, and
+        its response."""
+        for conn in self.connections:
+            # Look for a tube with something in it.
+            if (conn.peek_ready() != None):
+                resp = self._call_wrap(conn,func,args)
+                return (conn,resp)
+        return self._send_to_rand_conn( func,args)
+    
+    def _send_to_all(self,func,args=None):
+        """Send to all connections in the pool. Returns a list of tuples
+        (conn,response)"""
+        results = []
+        for conn in self.connections:
+            results.append( self._call_wrap(func,args) )
+        return results
+        
+    def connect(self):
+        for (host,port) in self.bstalks:
+            try:
+                conn = Connection(host=host, port=port, parse_yaml=True,
+                                  connect_timeout=socket.getdefaulttimeout())
+                self.connections.append( conn )
+            except SocketError, e:
+                logging.error('Failed connecting to %s %d' % (host,port))
+    
+    def close(self):
+        """Close all connections in the pool."""
+        self._send_to_all( Connection.close)
+    
+    def put(self,arg):
+        """Put a job in the pool."""
+        return self._send_to_rand_conn( Connection.put, arg)
+    
+    def put_balanced(self,arg):
+        """Put a job in the pool, preferably in a connection with no jobs
+        present in their tube."""
+        return self._send_to_empty_connection( Connection.put, arg)
+        
+    def reserve(self):
+        """Reserve a job from the pool."""
+        return self._send_to_nonempty_connection( Connection.reserve, None)
+    
+    def using(self):
+        """Return the tubes currently in use for every connection in the
+        pool."""
+        return self._send_to_all( Connection.use, name)
+    
+    def use(self,name):
+        """Use this tube on every connection in the pool."""
+        self._send_to_all( Connection.use, name)
+    
+    def ignore(self,name):
+        """Ignore the given tube in all connections in the pool."""
+        self._send_to_all( Connection.ignore, name)
+    
+    def stats(self):
+        """Return a list of dicts of beanstalkd statistics."""
+        return self._send_to_all( Connection.stats)
+
+    def stats_tube(self, name):
+        """Return a list of dicts of stats about a given tube."""
+        return self._send_to_all( Connection.stats_tube, name)
+        
+    def pause_tube(self, name, delay):
+        """Pause a tube on all connections for a given delay time, in
+        seconds."""
+        self._send_to_all( Connection.pause_tube,[name, delay])
+    
 
 class Connection(object):
     def __init__(self, host=DEFAULT_HOST, port=DEFAULT_PORT, parse_yaml=True,

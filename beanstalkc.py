@@ -22,6 +22,7 @@ __version__ = '0.3.0'
 import logging
 import socket
 import random
+import time
 
 
 DEFAULT_HOST = 'localhost'
@@ -101,6 +102,27 @@ class Pool(object):
         for conn in self.connections:
             results.append( self._call_wrap(func,args) )
         return results
+    
+    def reserve(self,pool_timeout=None,timeout=10):
+        """Reserves a job from the pool."""
+        # Max wait for pool_timeout seconds:
+        timer = None
+        if (pool_timeout != None):
+            timer = time.time()
+        while (True):
+            conn = random.choice(self.connections)
+            try:
+                result = self._call_wrap(conn, Connection.reserve, timeout)
+                # If result == None, the reserve timed-out.
+                if (result != None):
+                    return (conn,result)
+            except DeadlineSoon as e:
+                pass
+            if (timer != None and time.time() > timer + pool_timeout):
+                break
+        # If we get here, the pool-timeout has been reached. Returning None
+        # just as Connection.reserve when the timeout is reached.
+        return (None,None)
         
     def connect(self):
         for (host,port) in self.bstalks:
@@ -124,7 +146,7 @@ class Pool(object):
         present in their tube."""
         return self._send_to_empty_connection( Connection.put, arg)
         
-    def reserve(self):
+    def reserve_with_peek(self):
         """Reserve a job from the pool."""
         return self._send_to_nonempty_connection( Connection.reserve, None)
     

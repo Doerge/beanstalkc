@@ -71,30 +71,6 @@ class Pool(object):
         resp = self._call_wrap(conn,func,args)
         return (conn,resp)
     
-    def _send_to_empty_connection(self,func,args=None):
-        """Run through all connections and see if any of them have 0 jobs in
-        their tube. If every connection have jobs, choose one at random.
-        Returns a tuple of the connection the command was sent to, and its
-        response."""
-        for conn in self.connections:
-            # Look for an empty tube.
-            if (conn.peek_ready() == None):
-                resp = self._call_wrap(conn,func,args)
-                return (conn,resp)
-        return self._send_to_rand_conn( func,args)
-    
-    def _send_to_nonempty_connection(self,func,args=None):
-        """Run through all connections and see if any of them DOSN'T have 0
-        jobs in their tube. If no connection have jobs, choose one at
-        random. Returns a tuple of the connection the command was sent to, and
-        its response."""
-        for conn in self.connections:
-            # Look for a tube with something in it.
-            if (conn.peek_ready() != None):
-                resp = self._call_wrap(conn,func,args)
-                return (conn,resp)
-        return self._send_to_rand_conn( func,args)
-    
     def _send_to_all(self,func,args=None):
         """Send to all connections in the pool. Returns a list of tuples
         (conn,response)"""
@@ -104,8 +80,9 @@ class Pool(object):
         return results
     
     def reserve(self,pool_timeout=None,timeout=10):
-        """Reserves a job from the pool."""
-        # Max wait for pool_timeout seconds:
+        """Reserves a job from the pool.
+        pool_timeout: Overall time in seconds before this call returns.
+             timeout: Individual reserve-calls timeouts."""
         timer = None
         if (pool_timeout != None):
             timer = time.time()
@@ -140,15 +117,6 @@ class Pool(object):
     def put(self,arg):
         """Put a job in the pool."""
         return self._send_to_rand_conn( Connection.put, arg)
-    
-    def put_balanced(self,arg):
-        """Put a job in the pool, preferably in a connection with no jobs
-        present in their tube."""
-        return self._send_to_empty_connection( Connection.put, arg)
-        
-    def reserve_with_peek(self):
-        """Reserve a job from the pool."""
-        return self._send_to_nonempty_connection( Connection.reserve, None)
     
     def using(self):
         """Return the tubes currently in use for every connection in the

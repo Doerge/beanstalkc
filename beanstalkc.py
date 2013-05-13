@@ -76,7 +76,7 @@ class Pool(object):
         (conn,response)"""
         results = []
         for conn in self.connections:
-            results.append( self._call_wrap(func,args) )
+            results.append( self._call_wrap(conn,func,args) )
         return results
     
     def reserve(self,pool_timeout=None,timeout=10):
@@ -126,6 +126,14 @@ class Pool(object):
     def use(self,name):
         """Use this tube on every connection in the pool."""
         self._send_to_all( Connection.use, name)
+    
+    def watching(self):
+        """Return a list of all tubes being watched."""
+        return self._send_to_all( Connection.watching)
+
+    def watch(self, name):
+        """Watch a given tube in all connections."""
+        return self._send_to_all( Connection.watch, name)
     
     def ignore(self,name):
         """Ignore the given tube in all connections in the pool."""

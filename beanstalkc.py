@@ -108,7 +108,7 @@ class Pool(object):
                                   connect_timeout=socket.getdefaulttimeout())
                 self.connections.append( conn )
             except SocketError, e:
-                logging.error('Failed connecting to %s %d' % (host,port))
+                logging.error('beanstalkc-pool failed connection to %s %d' % (host,port))
     
     def close(self):
         """Close all connections in the pool."""

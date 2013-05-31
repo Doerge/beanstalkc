@@ -48,13 +48,16 @@ class Pool(object):
     def __init__(self,bstalks):
         self.bstalks = bstalks
         self.connections = []
-        self.connect()
-        
-        # Gather the sockets in a dict as tuples of (socket,connection) so we
-        # can resolve socket objects to their connections.
-        self._sockets = dict()
-        for conn in self.connections:
-            self._sockets[conn._socket] = conn
+        self._connect()
+    
+    def _connect(self):
+        for (host,port) in self.bstalks:
+            try:
+                conn = Connection(host=host, port=port, parse_yaml=True,
+                                  connect_timeout=socket.getdefaulttimeout())
+                self.connections.append( conn )
+            except SocketError, e:
+                logging.error('beanstalkc-pool failed connection to %s %d' % (host,port))
     
     def _call_wrap(self,conn,func,args):
         if (args == None):
@@ -76,13 +79,15 @@ class Pool(object):
         (conn,response)"""
         results = []
         for conn in self.connections:
-            results.append( self._call_wrap(conn,func,args) )
+            results.append( (conn,self._call_wrap(conn,func,args)) )
         return results
     
     def reserve(self,pool_timeout=None,timeout=10):
         """Reserves a job from the pool.
         pool_timeout: Overall time in seconds before this call returns.
-             timeout: Individual reserve-calls timeouts."""
+             timeout: Individual reserve-calls timeouts.
+        
+        Returns: (connection,result) or (None,None)"""
         timer = None
         if (pool_timeout != None):
             timer = time.time()
@@ -101,15 +106,6 @@ class Pool(object):
         # just as Connection.reserve when the timeout is reached.
         return (None,None)
         
-    def connect(self):
-        for (host,port) in self.bstalks:
-            try:
-                conn = Connection(host=host, port=port, parse_yaml=True,
-                                  connect_timeout=socket.getdefaulttimeout())
-                self.connections.append( conn )
-            except SocketError, e:
-                logging.error('beanstalkc-pool failed connection to %s %d' % (host,port))
-    
     def close(self):
         """Close all connections in the pool."""
         self._send_to_all( Connection.close)
@@ -119,16 +115,17 @@ class Pool(object):
         return self._send_to_rand_conn( Connection.put, arg)
     
     def using(self):
-        """Return the tubes currently in use for every connection in the
-        pool."""
+        """Return a list of (connection,tube) indicating the tube currently in
+        use for every connection in the pool."""
         return self._send_to_all( Connection.use, name)
     
     def use(self,name):
-        """Use this tube on every connection in the pool."""
+        """Use 'name' tube on every connection in the pool."""
         self._send_to_all( Connection.use, name)
     
     def watching(self):
-        """Return a list of all tubes being watched."""
+        """Return a list of (connection,tubes) where tubes is all the tubes
+        being watched in that conenction."""
         return self._send_to_all( Connection.watching)
 
     def watch(self, name):
@@ -140,7 +137,7 @@ class Pool(object):
         self._send_to_all( Connection.ignore, name)
     
     def stats(self):
-        """Return a list of dicts of beanstalkd statistics."""
+        """Return a list of (connection,dicts) with beanstalkd statistics."""
         return self._send_to_all( Connection.stats)
 
     def stats_tube(self, name):

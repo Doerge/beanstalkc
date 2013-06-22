@@ -107,7 +107,7 @@ class Pool(object):
         # If we get here, the pool-timeout has been reached. Returning None
         # just as Connection.reserve when the timeout is reached.
         return (None,None)
-        
+    
     def connect(self):
         for (host,port) in self.bstalks:
             try:

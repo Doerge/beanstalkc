@@ -127,7 +127,7 @@ class Pool(object):
     
     def tubes(self):
         """Return a list of lists of all existing tubes."""
-        return self._send_to_all( Connection.use)
+        return self._send_to_all( Connection.tubes)
     
     def using(self):
         """Return a list of (connection,tube) indicating the tube currently in

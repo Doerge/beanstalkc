@@ -17,11 +17,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 '''
 
-__version__ = '0.3.0'
+__version__ = '0.4.0'
 
 import logging
 import socket
-
+import random
+import time
+import threading
 
 DEFAULT_HOST = 'localhost'
 DEFAULT_PORT = 11300
@@ -42,6 +44,166 @@ class SocketError(BeanstalkcException):
         except socket.error, err:
             raise SocketError(err)
 
+class Pool(object):
+    """ Pool class enclosing multiple Connection-objects. The constructor
+    expects a list of tuples, (str(host),int(port)) as input."""
+    def __init__(self,bstalks):
+        self.conLock = threading.RLock()
+        self.bstalks = bstalks
+        self.connections = []
+        self.init_connections()
+    
+    def init_connections(self):
+        threads = []
+        for (host,port) in self.bstalks:
+            t = threading.Thread(target=self._connect, args=(host,int(port)))
+            t.start()
+    
+    def _connect(self,host,port):
+        """Attempt connecting with beanstalkd at host:port. If successful add
+        to the connections-list and return. Else sleep, and try again."""
+        sleep_time = 2
+        while (True):
+            try:
+                conn = Connection(host=host, port=port, parse_yaml=True,
+                                  connect_timeout=5)
+                with self.conLock:
+                    self.connections.append( conn )
+                return
+            except SocketError, e:
+                logging.error('beanstalkc-pool failed connecting to %s %d. Retrying in a while.' % (host,port))
+                time.sleep(sleep_time)
+                sleep_time += sleep_time % 64
+    
+    def _call_wrap(self,conn,func,args):
+        """Handles the call of Connection-functions. Also responsible for
+        spawning threads to reconnect with lost Connections."""
+        try:
+            if (args == None):
+                return func(conn)
+            else:
+                return func(conn, args )
+        except SocketError as e:
+            with self.conLock:
+                self.connections.remove(conn)
+            t = threading.Thread(target=self._connect, args=(conn.host,conn.port))
+            t.start()
+            logging.error('beanstalkc-pool socket-error to %s %d. Started reconnect-thread.' % (conn.host,conn.port))
+            raise e
+    
+    def _send_to_rand_conn(self,func,args=None):
+        """Send to a random connection in the pool. Returns a tuple of the
+        connection the command was sent to, and its response."""
+        retries = 5
+        while (True):
+            try:
+                with self.conLock:
+                    conn = random.choice(self.connections)
+                break
+            except IndexError as e:
+                # self.connections is empty.. Sleep for a little while and try
+                # again.
+                if (not retries):
+                    raise SocketError('No connections available.')
+                time.sleep(2)
+            retries -= 1
+        
+        resp = self._call_wrap(conn,func,args)
+        return (conn,resp)
+    
+    def _send_to_all(self,func,args=None):
+        """Send to all connections in the pool. Returns a list of tuples
+        (conn,response)"""
+        results = []
+        with self.conLock:
+            # Loop over a copy of self.connections (slice notation) to
+            # encompass changes to itself, during the loop.
+            for conn in self.connections[:]:
+                try:
+                    results.append( (conn,self._call_wrap(conn,func,args)) )
+                except SocketError as e:
+                    logging.error('beanstalkc-pool connection error in _send_to_all(). Skipping connection.')
+        return results
+    
+    def reserve(self,pool_timeout=None,timeout=10):
+        """Reserves a job from the pool randomly.
+        pool_timeout: Overall time in seconds before this call returns.
+             timeout: Individual reserve-calls timeouts.
+        
+        Returns: (connection,result) or (None,None)"""
+        timer = None
+        if (pool_timeout != None):
+            timer = time.time()
+        while (True):
+            try:
+                with self.conLock:
+                    conn = random.choice(self.connections)
+                result = self._call_wrap(conn, Connection.reserve, timeout)
+                # If result == None, the reserve timed-out and we try again.
+                if (result != None):
+                    return (conn,result)
+            except DeadlineSoon as e:
+                # Deadlinesoon. We give up and try reserving another job.
+                pass
+            except SocketError as e:
+                # The connection we chose failed. Trying another.. (it has been
+                # removed from the connections list..)
+                pass
+            except IndexError as e:
+                # self.connections is empty.. Sleep for a little while and try again.
+                time.sleep(2)
+            if (timer != None and time.time() > timer + pool_timeout):
+                # If we get here, the pool-timeout has been reached. Returning
+                # None just as Connection.reserve when the timeout is reached.
+                return (None,None)
+    
+    def close(self):
+        """Close all connections in the pool."""
+        self._send_to_all( Connection.close)
+    
+    def put(self,arg):
+        """Put a job in the pool."""
+        return self._send_to_rand_conn( Connection.put, arg)
+    
+    def tubes(self):
+        """Return a list of lists of all existing tubes."""
+        return self._send_to_all( Connection.tubes)
+    
+    def using(self):
+        """Return a list of (connection,tube) indicating the tube currently in
+        use for every connection in the pool."""
+        return self._send_to_all( Connection.use)
+    
+    def use(self,name):
+        """Use 'name' tube on every connection in the pool."""
+        self._send_to_all( Connection.use, name)
+    
+    def watching(self):
+        """Return a list of (connection,tubes) where tubes is all the tubes
+        being watched in that conenction."""
+        return self._send_to_all( Connection.watching)
+
+    def watch(self, name):
+        """Watch a given tube in all connections."""
+        return self._send_to_all( Connection.watch, name)
+    
+    def ignore(self,name):
+        """Ignore the given tube in all connections in the pool."""
+        self._send_to_all( Connection.ignore, name)
+    
+    def stats(self):
+        """Return a list of (connection,dicts) with beanstalkd statistics."""
+        return self._send_to_all( Connection.stats)
+
+    def stats_tube(self, name):
+        """Return a list of dicts of stats about a given tube."""
+        return self._send_to_all( Connection.stats_tube, name)
+        
+    def pause_tube(self, name, delay):
+        """Pause a tube on all connections for a given delay time, in
+        seconds."""
+        self._send_to_all( Connection.pause_tube,[name, delay])
+    
 
 class Connection(object):
     def __init__(self, host=DEFAULT_HOST, port=DEFAULT_PORT, parse_yaml=True,
@@ -92,7 +254,7 @@ class Connection(object):
     def _read_response(self):
         line = SocketError.wrap(self._socket_file.readline)
         if not line:
-            raise SocketError()
+            raise SocketError('SocketError')
         response = line.split()
         return response[0], response[1:]
 

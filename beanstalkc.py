@@ -125,10 +125,14 @@ class Pool(object):
         """Put a job in the pool."""
         return self._send_to_rand_conn( Connection.put, arg)
     
+    def tubes(self):
+        """Return a list of lists of all existing tubes."""
+        return self._send_to_all( Connection.use)
+    
     def using(self):
         """Return a list of (connection,tube) indicating the tube currently in
         use for every connection in the pool."""
-        return self._send_to_all( Connection.use, name)
+        return self._send_to_all( Connection.use)
     
     def use(self,name):
         """Use 'name' tube on every connection in the pool."""

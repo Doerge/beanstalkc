@@ -52,6 +52,11 @@ class Pool(object):
         self.bstalks = bstalks
         self.connections = []
         self.init_connections()
+        
+        # Sleep to allow the connection-threads to connect to their demons.
+        time.sleep(3)
+        logging.debug('DEBUG: ' + str(len(self.connections)) + ' out of ' +
+                      str(len(bstalks)) + ' succeeded in connecting. (Yay?)')
     
     def init_connections(self):
         threads = []
@@ -118,6 +123,8 @@ class Pool(object):
         with self.conLock:
             # Loop over a copy of self.connections (slice notation) to
             # encompass changes to itself, during the loop.
+            if len(self.connections) == 0:
+                raise BeanstalkException('Pool is empty. Nothing sent.')
             for conn in self.connections[:]:
                 try:
                     results.append( (conn,self._call_wrap(conn,func,args)) )

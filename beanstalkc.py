@@ -124,7 +124,7 @@ class Pool(object):
             # Loop over a copy of self.connections (slice notation) to
             # encompass changes to itself, during the loop.
             if len(self.connections) == 0:
-                raise BeanstalkException('Pool is empty. Nothing sent.')
+                raise BeanstalkcException('Pool is empty. Nothing sent.')
             for conn in self.connections[:]:
                 try:
                     results.append( (conn,self._call_wrap(conn,func,args)) )

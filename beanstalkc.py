@@ -51,18 +51,32 @@ class Pool(object):
         self.conLock = threading.RLock()
         self.bstalks = bstalks
         self.connections = []
-        self.init_connections()
+        self._init_connections()
         
-        # Sleep to allow the connection-threads to connect to their demons.
-        time.sleep(3)
         logging.debug('DEBUG: ' + str(len(self.connections)) + ' out of ' +
                       str(len(bstalks)) + ' succeeded in connecting. (Yay?)')
     
-    def init_connections(self):
-        threads = []
+    def _init_connections(self):
+        """Blocking until each connection has been tried. Any failures entails
+        a separate retry-thread."""
         for (host,port) in self.bstalks:
-            t = threading.Thread(target=self._connect, args=(host,int(port)))
-            t.start()
+            # Someone could have supplied the port as a string. Just convert it.
+            try:
+                port = int(port)
+            except ValueError:
+                logging.error('beanstalkc-pool failed converting %s to an int. Skipping connection.' % port)
+                continue
+            # Connect to the demon at host:port
+            try:
+                conn = Connection(host=host, port=port, parse_yaml=True,
+                                  connect_timeout=5)
+                with self.conLock:
+                    self.connections.append( conn )
+            except SocketError, e:
+                # Some network-error happened. Spawn a retry-thread:
+                logging.error('beanstalkc-pool failed connecting to %s %d. Retrying in a while.' % (host,port))
+                t = threading.Thread(target=self._connect, args=(host,port))
+                t.start()
     
     def _connect(self,host,port):
         """Attempt connecting with beanstalkd at host:port. If successful add
